@@ -4,9 +4,16 @@ const Parser = require('rss-parser');
 
 const app = express();
 app.get('/', (req, res) => res.send('Bot vivo'));
-app.listen(3000);
+// Aseguramos que Render pueda usar su propio puerto
+app.listen(process.env.PORT || 3000); 
 
-const parser = new Parser();
+// Disfrazamos al bot como un navegador Chrome normal para evitar que lo bloqueen
+const parser = new Parser({
+    headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+});
+
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 const MONITOREO = [
@@ -27,23 +34,34 @@ client.once('ready', () => {
 async function revisarTweets() {
     for (const cuenta of MONITOREO) {
         try {
-            const rssUrl = `https://rsshub.app/twitter/user/${cuenta.twitterUser}`;
+            // Usamos xcancel, una instancia resistente a bloqueos
+            const rssUrl = `https://xcancel.com/${cuenta.twitterUser}/rss`;
             const feed = await parser.parseURL(rssUrl);
+            
             if (!feed.items || feed.items.length === 0) continue;
+            
             const ultimoTweet = feed.items[0];
-            const tweetId = ultimoTweet.link;
+            
+            // Reconvertimos el link a formato de Twitter para enviarlo al canal
+            const linkOriginal = ultimoTweet.link.replace('xcancel.com', 'twitter.com');
+            const tweetId = linkOriginal;
 
             if (!historialTweets[cuenta.twitterUser]) {
                 historialTweets[cuenta.twitterUser] = tweetId;
+                console.log(`Primer tweet registrado en memoria para: ${cuenta.twitterUser}`);
                 continue;
             }
 
             if (historialTweets[cuenta.twitterUser] !== tweetId) {
                 historialTweets[cuenta.twitterUser] = tweetId;
                 const canal = await client.channels.fetch(cuenta.discordChannelId);
-                if (canal) await canal.send(`📢 **Nuevo tweet de @${cuenta.twitterUser}:**\n${ultimoTweet.link}`);
+                if (canal) await canal.send(`📢 **Nuevo tweet de @${cuenta.twitterUser}:**\n${linkOriginal}`);
+                console.log(`¡Tweet de ${cuenta.twitterUser} enviado al canal!`);
             }
-        } catch (e) { console.log(`Error con ${cuenta.twitterUser}`); }
+        } catch (e) { 
+            // Ahora si falla, te dirá exactamente la causa técnica en los logs
+            console.log(`Error con ${cuenta.twitterUser}: ${e.message}`); 
+        }
     }
 }
 
