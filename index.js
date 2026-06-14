@@ -2,12 +2,12 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const express = require('express');
 const Parser = require('rss-parser');
 
+// 1. Mantenemos el servidor web para que UptimeRobot esté feliz
 const app = express();
 app.get('/', (req, res) => res.send('Bot vivo'));
-// Aseguramos que Render pueda usar su propio puerto
 app.listen(process.env.PORT || 3000); 
 
-// Disfrazamos al bot como un navegador Chrome normal para evitar que lo bloqueen
+// 2. Disfrazamos al bot
 const parser = new Parser({
     headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -33,34 +33,54 @@ client.once('ready', () => {
 
 async function revisarTweets() {
     for (const cuenta of MONITOREO) {
-        try {
-            // Usamos xcancel, una instancia resistente a bloqueos
-            const rssUrl = `https://xcancel.com/${cuenta.twitterUser}/rss`;
-            const feed = await parser.parseURL(rssUrl);
-            
-            if (!feed.items || feed.items.length === 0) continue;
-            
-            const ultimoTweet = feed.items[0];
-            
-            // Reconvertimos el link a formato de Twitter para enviarlo al canal
-            const linkOriginal = ultimoTweet.link.replace('xcancel.com', 'twitter.com');
-            const tweetId = linkOriginal;
+        
+        // SISTEMA ANTI-CAÍDAS: Lista de servidores alternativos
+        const servidoresRSS = [
+            `https://nitter.poast.org/${cuenta.twitterUser}/rss`,
+            `https://nitter.privacydev.net/${cuenta.twitterUser}/rss`,
+            `https://rsshub.app/twitter/user/${cuenta.twitterUser}`
+        ];
 
-            if (!historialTweets[cuenta.twitterUser]) {
-                historialTweets[cuenta.twitterUser] = tweetId;
-                console.log(`Primer tweet registrado en memoria para: ${cuenta.twitterUser}`);
-                continue;
+        let feed = null;
+
+        // El bot probará uno por uno hasta que uno funcione
+        for (const url of servidoresRSS) {
+            try {
+                feed = await parser.parseURL(url);
+                break; // ¡Funcionó! Rompemos el ciclo y dejamos de intentar
+            } catch (e) {
+                // Si falla, no hace ruido, simplemente pasa al siguiente enlace
+                continue; 
             }
+        }
 
-            if (historialTweets[cuenta.twitterUser] !== tweetId) {
-                historialTweets[cuenta.twitterUser] = tweetId;
+        // Si después de intentar con todos, ninguno funcionó:
+        if (!feed || !feed.items || feed.items.length === 0) {
+            console.log(`Twitter bloqueó la lectura de ${cuenta.twitterUser} en este turno (Reintentará en 10 min).`);
+            continue;
+        }
+
+        const ultimoTweet = feed.items[0];
+        
+        // Limpiamos el link sin importar de qué servidor vino
+        const linkOriginal = ultimoTweet.link.replace(/(nitter\.poast\.org|nitter\.privacydev\.net|rsshub\.app\/twitter\/user)/g, 'twitter.com');
+        const tweetId = linkOriginal;
+
+        if (!historialTweets[cuenta.twitterUser]) {
+            historialTweets[cuenta.twitterUser] = tweetId;
+            console.log(`Primer tweet registrado en memoria para: ${cuenta.twitterUser}`);
+            continue;
+        }
+
+        if (historialTweets[cuenta.twitterUser] !== tweetId) {
+            historialTweets[cuenta.twitterUser] = tweetId;
+            try {
                 const canal = await client.channels.fetch(cuenta.discordChannelId);
                 if (canal) await canal.send(`📢 **Nuevo tweet de @${cuenta.twitterUser}:**\n${linkOriginal}`);
                 console.log(`¡Tweet de ${cuenta.twitterUser} enviado al canal!`);
+            } catch (err) {
+                console.log(`Fallo al enviar mensaje a Discord.`);
             }
-        } catch (e) { 
-            // Ahora si falla, te dirá exactamente la causa técnica en los logs
-            console.log(`Error con ${cuenta.twitterUser}: ${e.message}`); 
         }
     }
 }
